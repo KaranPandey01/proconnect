@@ -12,7 +12,7 @@ from app.deps import get_current_user
 from app.cache import r
 from app.feed import router as feed_router
 from app.routes import comments
-
+print("DEPLOY CHECK - COMMENTS SHOULD WORK")
 # ---------------- INIT ----------------
 models.Base.metadata.create_all(bind=engine)
 
@@ -218,4 +218,3 @@ def search_users(query: str, db: Session = Depends(get_db)):
     return [{"id": u.id, "email": u.email} for u in users]
 
 
-print("DEPLOY CHECK - COMMENTS SHOULD WORK")
