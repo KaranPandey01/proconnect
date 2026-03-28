@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
+from typing import List
 from app.database import get_db
 from app import models
 from app.security import get_current_user
@@ -10,6 +11,7 @@ import json
 router = APIRouter()
 
 
+# ---------------- FEED ----------------
 @router.get("/feed")
 def get_feed(
     limit: int = 10,
@@ -20,13 +22,13 @@ def get_feed(
     try:
         cache_key = f"feed:{current_user.id}:{limit}:{offset}"
 
-        # ---------------- CACHE ----------------
+        # -------- CACHE --------
         if r:
             cached = r.get(cache_key)
             if cached:
                 return json.loads(cached)
 
-        # ---------------- QUERY ----------------
+        # -------- QUERY --------
         posts = (
             db.query(
                 models.Post.id,
@@ -46,10 +48,7 @@ def get_feed(
             .outerjoin(models.Like, models.Like.post_id == models.Post.id)
             .group_by(
                 models.Post.id,
-                models.Post.content,
-                models.Post.user_id,
-                models.User.email,
-                models.Post.created_at
+                models.User.email
             )
             .order_by(models.Post.created_at.desc())
             .offset(offset)
@@ -57,19 +56,21 @@ def get_feed(
             .all()
         )
 
-        # ---------------- FORMAT ----------------
-        result = []
-        for row in posts:
-            result.append({
-                "id": row.id,
-                "content": row.content,
-                "user_id": row.user_id,
-                "user_name": row.email,
-                "like_count": int(row.like_count or 0),
-                "is_liked": bool(row.is_liked)
-            })
+        # -------- FORMAT --------
+        result = [
+            {
+                "id": post.id,
+                "content": post.content,
+                "user_id": post.user_id,
+                "user_name": post.email,
+                "like_count": int(post.like_count or 0),
+                "is_liked": bool(post.is_liked),
+                "created_at": str(post.created_at)
+            }
+            for post in posts
+        ]
 
-        # ---------------- CACHE STORE ----------------
+        # -------- CACHE STORE --------
         if r:
             r.setex(cache_key, 10, json.dumps(result))
 
@@ -78,3 +79,55 @@ def get_feed(
     except Exception as e:
         print("FEED ERROR:", e)
         raise HTTPException(status_code=500, detail="Error fetching feed")
+
+
+# ---------------- USER POSTS (FIXES YOUR 404) ----------------
+@router.get("/posts/user/{user_id}")
+def get_user_posts(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    try:
+        posts = (
+            db.query(
+                models.Post.id,
+                models.Post.content,
+                models.Post.user_id,
+                models.User.email,
+                func.count(models.Like.post_id).label("like_count"),
+                func.max(
+                    case(
+                        (models.Like.user_id == current_user.id, 1),
+                        else_=0
+                    )
+                ).label("is_liked"),
+                models.Post.created_at
+            )
+            .join(models.User, models.Post.user_id == models.User.id)
+            .outerjoin(models.Like, models.Like.post_id == models.Post.id)
+            .filter(models.Post.user_id == user_id)
+            .group_by(
+                models.Post.id,
+                models.User.email
+            )
+            .order_by(models.Post.created_at.desc())
+            .all()
+        )
+
+        return [
+            {
+                "id": post.id,
+                "content": post.content,
+                "user_id": post.user_id,
+                "user_name": post.email,
+                "like_count": int(post.like_count or 0),
+                "is_liked": bool(post.is_liked),
+                "created_at": str(post.created_at)
+            }
+            for post in posts
+        ]
+
+    except Exception as e:
+        print("USER POSTS ERROR:", e)
+        raise HTTPException(status_code=500, detail="Error fetching user posts")
