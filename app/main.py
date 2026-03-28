@@ -136,7 +136,7 @@ def toggle_like(
             r.delete(key)
 
     return {"message": action}
-
+print("DEPLOY CHECK - COMMENTS SHOULD WORK")
 # ---------------- PROFILE POSTS ----------------
 @app.get("/users/{user_id}/posts")
 def get_user_posts(
