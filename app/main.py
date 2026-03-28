@@ -11,8 +11,10 @@ from app.security import hash_password, verify_password, create_access_token
 from app.deps import get_current_user
 from app.cache import r
 from app.feed import router as feed_router
-from app.routes import comments
+from app.routes.comments import router as comments_router
+
 print("DEPLOY CHECK - COMMENTS SHOULD WORK")
+
 # ---------------- INIT ----------------
 models.Base.metadata.create_all(bind=engine)
 
@@ -31,7 +33,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 # ---------------- ROUTERS ----------------
 app.include_router(feed_router)
-app.include_router(comments.router)
+app.include_router(comments_router)
 
 # ---------------- ROOT ----------------
 @app.get("/")
@@ -103,7 +105,7 @@ def create_post(
     db.commit()
     db.refresh(new_post)
 
-    # invalidate cache
+    # 🔥 clear ALL feed cache (important fix)
     if r:
         for key in r.scan_iter("feed:*"):
             r.delete(key)
@@ -131,6 +133,7 @@ def toggle_like(
 
     db.commit()
 
+    # 🔥 clear cache
     if r:
         for key in r.scan_iter("feed:*"):
             r.delete(key)
@@ -216,5 +219,3 @@ def search_users(query: str, db: Session = Depends(get_db)):
     ).limit(10).all()
 
     return [{"id": u.id, "email": u.email} for u in users]
-
-
