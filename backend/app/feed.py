@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, case
+from sqlalchemy import func, case
 from app.database import get_db
 from app import models
 from app.security import get_current_user
@@ -20,13 +20,13 @@ def get_feed(
     try:
         cache_key = f"feed:{current_user.id}:{limit}:{offset}"
 
-        # ---------------- CACHE CHECK ----------------
+        # ---------------- CACHE ----------------
         if r:
             cached = r.get(cache_key)
             if cached:
                 return json.loads(cached)
 
-        # ---------------- RANKED QUERY (GLOBAL FEED) ----------------
+        # ---------------- QUERY ----------------
         posts = (
             db.query(
                 models.Post.id,
@@ -44,32 +44,34 @@ def get_feed(
             )
             .join(models.User, models.Post.user_id == models.User.id)
             .outerjoin(models.Like, models.Like.post_id == models.Post.id)
-            .group_by(models.Post.id, models.User.email)
-            .order_by(
-                desc(func.count(models.Like.post_id)),
-                desc(models.Post.created_at)
+            .group_by(
+                models.Post.id,
+                models.Post.content,
+                models.Post.user_id,
+                models.User.email,
+                models.Post.created_at
             )
+            .order_by(models.Post.created_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
         )
 
-        # ---------------- RESPONSE ----------------
+        # ---------------- FORMAT ----------------
         result = []
-
         for row in posts:
             result.append({
-                "id": row[0],
-                "content": row[1],
-                "user_id": row[2],
-                "user_name": row[3],
-                "like_count": row[4] if row[4] else 0,
-                "is_liked": bool(row[5]) if row[5] else False
+                "id": row.id,
+                "content": row.content,
+                "user_id": row.user_id,
+                "user_name": row.email,
+                "like_count": int(row.like_count or 0),
+                "is_liked": bool(row.is_liked)
             })
 
         # ---------------- CACHE STORE ----------------
         if r:
-            r.setex(cache_key, 60, json.dumps(result))
+            r.setex(cache_key, 10, json.dumps(result))
 
         return result
 

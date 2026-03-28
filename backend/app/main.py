@@ -1,23 +1,22 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.exc import IntegrityError
-from jose import JWTError, jwt
+from sqlalchemy import func, case
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import engine, get_db
-from . import models, schemas
-from .security import (
-    hash_password,
-    verify_password,
-    create_access_token,
-    SECRET_KEY,
-    ALGORITHM
-)
-from .cache import r
+from app.database import engine, get_db
+from app import models, schemas
+from app.security import hash_password, verify_password, create_access_token
+from app.deps import get_current_user
+from app.cache import r
 from app.feed import router as feed_router
+from app.routes.comments import router as comments_router
 
+print("DEPLOY CHECK - COMMENTS SHOULD WORK")
+print("🔥 DEPLOY CHECK V2 — IF YOU SEE THIS, CODE IS UPDATED 🔥")
 
+# ---------------- INIT ----------------
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -25,7 +24,7 @@ app = FastAPI()
 # ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,15 +32,14 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# include feed router
+# ---------------- ROUTERS ----------------
 app.include_router(feed_router)
-
+app.include_router(comments_router)
 
 # ---------------- ROOT ----------------
 @app.get("/")
 def root():
     return {"message": "Server running"}
-
 
 # ---------------- SIGNUP ----------------
 @app.post("/signup")
@@ -53,11 +51,9 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    hashed_pw = hash_password(user.password)
-
     new_user = models.User(
         email=user.email,
-        hashed_password=hashed_pw
+        hashed_password=hash_password(user.password)
     )
 
     db.add(new_user)
@@ -66,67 +62,33 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
     return {"message": "User created successfully"}
 
-
-# ---------------- LOGIN (FIXED) ----------------
+# ---------------- LOGIN ----------------
 @app.post("/login")
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    db_user = db.query(models.User).filter(
+    user = db.query(models.User).filter(
         models.User.email == form_data.username
     ).first()
 
-    if not db_user or not verify_password(form_data.password, db_user.hashed_password):
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
 
-    # CRITICAL FIX → use "sub"
-    access_token = create_access_token(
-        data={"sub": db_user.email}
-    )
+    token = create_access_token(data={"sub": user.email})
 
     return {
-        "access_token": access_token,
+        "access_token": token,
         "token_type": "bearer"
     }
 
-
-# ---------------- GET CURRENT USER (CLEAN) ----------------
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid token",
-    )
-
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-
-        if email is None:
-            raise credentials_exception
-
-    except JWTError:
-        raise credentials_exception
-
-    user = db.query(models.User).filter(models.User.email == email).first()
-
-    if user is None:
-        raise credentials_exception
-
-    return user
-
-
 # ---------------- ME ----------------
 @app.get("/me")
-def read_users_me(current_user=Depends(get_current_user)):
+def get_me(current_user=Depends(get_current_user)):
     return {
         "id": current_user.id,
         "email": current_user.email
     }
-
 
 # ---------------- CREATE POST ----------------
 @app.post("/posts")
@@ -144,11 +106,88 @@ def create_post(
     db.commit()
     db.refresh(new_post)
 
+    # 🔥 clear ALL feed cache (important fix)
     if r:
-        r.delete(f"feed:{current_user.id}:10:0")
+        for key in r.scan_iter("feed:*"):
+            r.delete(key)
 
     return new_post
 
+# ---------------- LIKE ----------------
+@app.post("/like/{post_id}")
+def toggle_like(
+    post_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    existing = db.query(models.Like).filter(
+        models.Like.user_id == current_user.id,
+        models.Like.post_id == post_id
+    ).first()
+
+    if existing:
+        db.delete(existing)
+        action = "Unliked"
+    else:
+        db.add(models.Like(user_id=current_user.id, post_id=post_id))
+        action = "Liked"
+
+    db.commit()
+
+    # 🔥 clear cache
+    if r:
+        for key in r.scan_iter("feed:*"):
+            r.delete(key)
+
+    return {"message": action}
+
+# ---------------- PROFILE POSTS ----------------
+@app.get("/users/{user_id}/posts")
+def get_user_posts(
+    user_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    posts = (
+        db.query(
+            models.Post.id,
+            models.Post.content,
+            models.Post.user_id,
+            models.User.email,
+            func.count(models.Like.post_id).label("like_count"),
+            func.max(
+                case(
+                    (models.Like.user_id == current_user.id, 1),
+                    else_=0
+                )
+            ).label("is_liked"),
+            models.Post.created_at
+        )
+        .join(models.User, models.Post.user_id == models.User.id)
+        .outerjoin(models.Like, models.Like.post_id == models.Post.id)
+        .filter(models.Post.user_id == user_id)
+        .group_by(
+            models.Post.id,
+            models.Post.content,
+            models.Post.user_id,
+            models.User.email,
+            models.Post.created_at
+        )
+        .order_by(models.Post.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": p[0],
+            "content": p[1],
+            "user_id": p[2],
+            "user_name": p[3],
+            "like_count": int(p[4] or 0),
+            "is_liked": bool(p[5]),
+        }
+        for p in posts
+    ]
 
 # ---------------- FOLLOW ----------------
 @app.post("/follow/{user_id}")
@@ -171,85 +210,13 @@ def follow_user(
     except IntegrityError:
         db.rollback()
 
-    if r:
-        r.delete(f"feed:{current_user.id}:10:0")
+    return {"message": "Followed"}
 
-    return {"message": "Followed successfully"}
+# ---------------- SEARCH USERS ----------------
+@app.get("/search/users")
+def search_users(query: str, db: Session = Depends(get_db)):
+    users = db.query(models.User).filter(
+        models.User.email.ilike(f"%{query}%")
+    ).limit(10).all()
 
-
-# ---------------- LIKE ----------------
-@app.post("/like/{post_id}")
-def like_post(
-    post_id: int,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    like = models.Like(user_id=current_user.id, post_id=post_id)
-
-    try:
-        db.add(like)
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-
-    if r:
-        r.delete(f"feed:{current_user.id}:10:0")
-
-    return {"message": "Post liked"}
-
-
-# ---------------- UNLIKE ----------------
-@app.delete("/like/{post_id}")
-def unlike_post(
-    post_id: int,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    db.query(models.Like).filter(
-        models.Like.user_id == current_user.id,
-        models.Like.post_id == post_id
-    ).delete()
-
-    db.commit()
-
-    if r:
-        r.delete(f"feed:{current_user.id}:10:0")
-
-    return {"message": "Post unliked"}
-
-
-# ---------------- UNFOLLOW ----------------
-@app.delete("/follow/{user_id}")
-def unfollow_user(
-    user_id: int,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    db.query(models.Follow).filter(
-        models.Follow.follower_id == current_user.id,
-        models.Follow.following_id == user_id
-    ).delete()
-
-    db.commit()
-
-    if r:
-        r.delete(f"feed:{current_user.id}:10:0")
-
-    return {"message": "Unfollowed successfully"}
-
-
-# ---------------- FOLLOWERS COUNT ----------------
-@app.get("/followers/count/{user_id}")
-def get_followers_count(user_id: int, db: Session = Depends(get_db)):
-    count = db.query(models.Follow).filter(
-        models.Follow.following_id == user_id
-    ).count()
-
-    return {"followers": count}
-
-
-# ---------------- GET POSTS ----------------
-@app.get("/posts")
-def get_all_posts(db: Session = Depends(get_db)):
-    posts = db.query(models.Post).all()
-    return posts
+    return [{"id": u.id, "email": u.email} for u in users]

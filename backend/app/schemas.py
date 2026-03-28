@@ -1,4 +1,8 @@
 from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel
+
+class CommentCreate(BaseModel):
+    content: str
 
 class UserCreate(BaseModel):
     email: EmailStr
