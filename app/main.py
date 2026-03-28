@@ -136,7 +136,7 @@ def toggle_like(
             r.delete(key)
 
     return {"message": action}
-print("DEPLOY CHECK - COMMENTS SHOULD WORK")
+
 # ---------------- PROFILE POSTS ----------------
 @app.get("/users/{user_id}/posts")
 def get_user_posts(
@@ -216,3 +216,6 @@ def search_users(query: str, db: Session = Depends(get_db)):
     ).limit(10).all()
 
     return [{"id": u.id, "email": u.email} for u in users]
+
+
+print("DEPLOY CHECK - COMMENTS SHOULD WORK")
