@@ -30,8 +30,13 @@ def create_comment(
 
 @router.get("/{post_id}")
 def get_comments(post_id: int, db: Session = Depends(get_db)):
-    comments = db.query(models.Comment).filter(
-        models.Comment.post_id == post_id
-    ).all()
+    comments = db.query(models.Comment).filter(models.Comment.post_id == post_id).all()
 
-    return comments
+    return [
+        {
+            "id": c.id,
+            "content": c.content,
+            "user_id": c.user_id
+        }
+        for c in comments
+    ]
