@@ -21,14 +21,14 @@ export default function CreatePost({
     const rawPost = await createPost(content)
 
     const newPost: Post = {
-      id: rawPost.id,
-      content: rawPost.content,
-      user_id: rawPost.user_id,
-      user_name: rawPost.user_name || "You",
-      like_count: rawPost.like_count ?? 0,
-      is_liked: rawPost.is_liked ?? false,
-    }
-
+  id: rawPost.id,
+  content: rawPost.content,
+  user_id: rawPost.user_id,
+  user_name: rawPost.user_name,
+  like_count: rawPost.like_count,
+  is_liked: rawPost.is_liked,
+  created_at: rawPost.created_at || new Date().toISOString(),
+}
     onPostCreated(newPost)
 
     setContent("")
