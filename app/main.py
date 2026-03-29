@@ -14,7 +14,7 @@ from app.feed import router as feed_router
 from app.routes.comments import router as comments_router
 
 print("DEPLOY CHECK - COMMENTS SHOULD WORK")
-print("🔥 DEPLOY CHECK V2 — IF YOU SEE THIS, CODE IS UPDATED 🔥")
+print(" DEPLOY CHECK V2 — IF YOU SEE THIS, CODE IS UPDATED ")
 
 # ---------------- INIT ----------------
 models.Base.metadata.create_all(bind=engine)

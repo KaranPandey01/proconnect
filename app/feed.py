@@ -8,11 +8,11 @@ from app.security import get_current_user
 from app.cache import r
 import json
 
-router = APIRouter()
+router = APIRouter(prefix="/feed")
 
 
 # ---------------- FEED ----------------
-@router.get("/feed")
+@router.get("/")
 def get_feed(
     limit: int = 10,
     offset: int = 0,
